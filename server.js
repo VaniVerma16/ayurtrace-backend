@@ -133,6 +133,11 @@ const Batch = mongoose.model(
       type: String,
       enum: ["READY", "IN_PROGRESS", "COMPLETE"],
       default: "READY"
+    },
+    qualityGate: {                                         // PASS | FAIL | PENDING
+      type: String,
+      enum: ["PASS", "FAIL", "PENDING"],
+      default: "PENDING"
     }
   }, { timestamps: true })
 );
@@ -169,6 +174,20 @@ const ProcessingStep = mongoose.model(
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
     postMetrics: { type: mongoose.Schema.Types.Mixed, default: {} },
     notes: String
+  }, { timestamps: true })
+);
+
+// Lab test results for quality gate
+const LabTest = mongoose.model(
+  "LabTest",
+  new mongoose.Schema({
+    id: { type: String, unique: true },                    // LT-xxxxxxxx
+    batchId: { type: String, required: true },
+    moisturePct: { type: Number, required: true },
+    pesticidePass: { type: Boolean, required: true },
+    pdfUrl: { type: String },                               // optional
+    gate: { type: String, enum: ["PASS", "FAIL"], required: true },
+    evaluatedAt: { type: Date, default: Date.now }
   }, { timestamps: true })
 );
 
@@ -384,6 +403,53 @@ app.patch("/batches/:id/chain-status", async (req, res) => {
   const r = await Batch.updateOne({ id }, { $set: { chainStatus: next } });
   if (r.matchedCount === 0) return res.status(404).json({ error: "NOT_FOUND" });
   return res.json({ id, chain_status: next });
+});
+
+// 8) Lab: submit quality test (moisture/pesticide) and update batch gate
+// Env threshold or default to 12%
+const MOISTURE_THRESHOLD_PCT = Number(process.env.MOISTURE_THRESHOLD_PCT || 12);
+app.post("/labtest", async (req, res) => {
+  const p = req.body || {};
+  if (!p.batch_id || typeof p.moisture_pct !== "number" || typeof p.pesticide_pass !== "boolean") {
+    return res.status(400).json({ error: "batch_id, moisture_pct(number), pesticide_pass(boolean) required" });
+  }
+  const gate = (p.moisture_pct <= MOISTURE_THRESHOLD_PCT && p.pesticide_pass) ? "PASS" : "FAIL";
+  const id = "LT-" + crypto.randomBytes(4).toString("hex");
+  const doc = await LabTest.create({
+    id,
+    batchId: p.batch_id,
+    moisturePct: p.moisture_pct,
+    pesticidePass: p.pesticide_pass,
+    pdfUrl: p.pdf_url || undefined,
+    gate
+  });
+  await Batch.updateOne({ id: p.batch_id }, { $set: { qualityGate: gate } });
+  return res.status(201).json({
+    lab_test: {
+      id: doc.id,
+      batch_id: doc.batchId,
+      moisture_pct: doc.moisturePct,
+      pesticide_pass: doc.pesticidePass,
+      pdf_url: doc.pdfUrl || null,
+      gate: doc.gate,
+      threshold_pct: MOISTURE_THRESHOLD_PCT
+    },
+    batch: { id: p.batch_id, quality_gate: gate }
+  });
+});
+
+// Optional: list lab tests for a batch
+app.get("/labtests", async (req, res) => {
+  const { batch_id, page = 1, page_size = 50 } = req.query;
+  const q = {};
+  if (batch_id) q.batchId = batch_id;
+  const limit = Math.min(parseInt(page_size,10) || 50, 200);
+  const skip = (parseInt(page,10) - 1) * limit;
+  const [items, total] = await Promise.all([
+    LabTest.find(q).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+    LabTest.countDocuments(q)
+  ]);
+  res.json({ items, page: Number(page), total });
 });
 
 // health
