@@ -11,23 +11,59 @@ const app = express();
 
 
 
-// if you don't need cookies/Authorization from browser:
-app.use(cors({
-  origin: "http://localhost:8080",
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"]
-}));
 
-// If you DO send cookies or Authorization and want them from the browser:
-app.use(cors({
-  origin: "http://localhost:8080",
+// Add your allowed origins here
+const allowList = new Set([
+  'http://localhost:8080',
+  'http://localhost:5173',
+  'https://ayurtracefront.netlify.app'
+]);
+
+function isAllowed(origin) {
+  // Allow curl/Postman (no Origin header)
+  if (!origin) return true;
+  try {
+    const { host, protocol } = new URL(origin);
+    if (allowList.has(`${protocol}//${host}`)) return true;
+    // Allow Netlify preview subdomains like pr-123--*.netlify.app
+    if (/\.netlify\.app$/.test(host)) return true;
+  } catch (_) {}
+  return false;
+}
+
+const corsOptions = {
+  origin: (origin, cb) => cb(null, isAllowed(origin)),
+  // Set to false if you DON'T use cookies or Authorization from the browser
   credentials: true,
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"]
-}));
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization']
+};
 
-// Good to explicitly answer preflight for custom headers/methods
-app.options("*", cors());
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));     // answer preflight
+
+app.use(express.json());
+
+// Example route
+app.get('/provenance/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    // const data = await getProvenanceById(id);
+    // res.json(data);
+    res.json({ ok: true, id }); // placeholder
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Central error handler
+app.use((err, req, res, _next) => {
+  console.error(err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'Internal error', detail: String(err.message || err) });
+  }
+});
+
 
 app.use(express.json({ limit: "5mb" }));
 
