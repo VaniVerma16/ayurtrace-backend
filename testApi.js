@@ -80,7 +80,9 @@ async function run() {
     // 10. List ready lab tests
     console.log('Listing ready lab tests...');
     const readyLT = await axios.get(`${BASE}/labtests/chain?status=READY`);
-    console.log('Ready LabTests:', readyLT.data.items);
+    readyLT.data.items.forEach(lt => {
+      console.log(`LabTest: id=${lt.id}, batch_id=${lt.batch_id}, status=${lt.status}, gate=${lt.gate}, hash=${lt.hash}`);
+    });
 
     // 11. Get provenance bundle
     console.log('Getting provenance bundle...');

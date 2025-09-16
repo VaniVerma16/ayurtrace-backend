@@ -1,11 +1,13 @@
 // server.js — Node 18+, Express + Mongoose (MongoDB Atlas)
 require("dotenv").config();
 const express = require("express");
+const cors = require('cors'); // <-- Added
 const mongoose = require("mongoose");
 const dns = require("dns");
 const crypto = require("crypto");
 
 const app = express();
+app.use(cors()); // <-- Added
 app.use(express.json({ limit: "5mb" }));
 
 // Force reliable DNS for SRV lookups (fixes intermittent macOS resolver issues)
