@@ -121,11 +121,30 @@ const Species = mongoose.model(
   }, { timestamps: true })
 );
 
+const CollectionEvent = mongoose.model(
+  "CollectionEvent",
+  new mongoose.Schema({
+    id: { type: String, unique: true },                    // CE-xxxxxxxx
+    clientEventId: { type: String, unique: true, sparse: true },
+    scientificName: { type: String, required: true },     // always provided directly by farmer
+    collectorId: { type: String, required: true },
+    geo: {
+      lat: Number, lng: Number, accuracy_m: Number
+    },
+    timestampUtc: { type: Date, required: true },
+    ai: { type: mongoose.Schema.Types.Mixed },             // stored verbatim if sent (not used now)
+    status: { type: String, default: "ACCEPTED" },         // ACCEPTED|REJECTED
+    violations: { type: Array, default: [] },
+    batchId: String,
+    hash: String                                           // canonical hash (for your own integrity checks)
+  }, { timestamps: true })
+);
+
 const Batch = mongoose.model(
   "Batch",
   new mongoose.Schema({
     id: { type: String, unique: true },                    // B-ASHWA-YYYYMMDD-farmer-123
-    scientificName: { type: String, required: true },
+    scientificName: { type: String, required: true },     // always provided directly by farmer
     collectorId: { type: String, required: true },
     dateUtc: { type: String, required: true },             // YYYY-MM-DD
     statusPhase: { type: String, default: "CREATED" },     // CREATED → ... → READY_FOR_QA
@@ -139,26 +158,6 @@ const Batch = mongoose.model(
       enum: ["PASS", "FAIL", "PENDING"],
       default: "PENDING"
     }
-  }, { timestamps: true })
-);
-
-const CollectionEvent = mongoose.model(
-  "CollectionEvent",
-  new mongoose.Schema({
-    id: { type: String, unique: true },                    // CE-xxxxxxxx
-    clientEventId: { type: String, unique: true, sparse: true },
-    scientificName: { type: String, required: true },
-    vernacularName: String,
-    collectorId: { type: String, required: true },
-    geo: {
-      lat: Number, lng: Number, accuracy_m: Number
-    },
-    timestampUtc: { type: Date, required: true },
-    ai: { type: mongoose.Schema.Types.Mixed },             // stored verbatim if sent (not used now)
-    status: { type: String, default: "ACCEPTED" },         // ACCEPTED|REJECTED
-    violations: { type: Array, default: [] },
-    batchId: String,
-    hash: String                                           // canonical hash (for your own integrity checks)
   }, { timestamps: true })
 );
 
@@ -226,26 +225,29 @@ app.post("/dev/seed-species", async (req, res) => {
 // 1) Create CollectionEvent (no AI here; client provides names)
 app.post("/collection", async (req, res) => {
   try {
-    const p = req.body || {};
-    if (!p.scientificName || !p.collectorId || !p.geo || typeof p.geo.lat !== "number" || typeof p.geo.lng !== "number" || !p.timestamp)
-      return res.status(400).json({ error: "scientificName, collectorId, geo.lat, geo.lng, timestamp required" });
+    const {
+      scientificName,
+      collectorId,
+      geo,
+      timestamp,
+      clientEventId
+    } = req.body;
 
     // idempotency by clientEventId
-    if (p.clientEventId) {
-      const exists = await CollectionEvent.findOne({ clientEventId: p.clientEventId }).lean();
+    if (clientEventId) {
+      const exists = await CollectionEvent.findOne({ clientEventId }).lean();
       if (exists) {
         return res.json({
           collectionEvent: {
             id: exists.id,
             scientificName: exists.scientificName,
-            vernacularName: exists.vernacularName,
             collectorId: exists.collectorId,
             geo: exists.geo,
             timestamp: isoZ(exists.timestampUtc),
             ai: exists.ai || {},
             status: exists.status,
             violations: exists.violations,
-            hash: exists.hash
+            hash: exists.hash || null
           },
           batch: { id: exists.batchId, status_phase: "CREATED" }
         });
@@ -253,48 +255,43 @@ app.post("/collection", async (req, res) => {
     }
 
     // ensure batch (day-batch per species+collector)
-    const code = await speciesCodeFor(p.scientificName);
-    const batchId = makeBatchId(code, p.timestamp, p.collectorId);
-    const dateUtc = isoZ(p.timestamp).slice(0,10);
+    const code = await speciesCodeFor(scientificName);
+    const batchId = makeBatchId(code, timestamp, collectorId);
+    const dateUtc = isoZ(timestamp).slice(0,10);
     await Batch.updateOne(
       { id: batchId },
-      { $setOnInsert: { id: batchId, scientificName: p.scientificName, collectorId: p.collectorId, dateUtc, statusPhase: "CREATED" } },
+      { $setOnInsert: { id: batchId, scientificName, collectorId, dateUtc, statusPhase: "CREATED" } },
       { upsert: true }
     );
 
-    // CE id + canonical hash (your own integrity check)
+    // CE id (no hash at creation)
     const ceid = "CE-" + crypto.randomBytes(4).toString("hex");
-    const hashBody = {
-      id: ceid,
-      scientificName: p.scientificName,
-      vernacularName: p.vernacularName || null,
-      collectorId: p.collectorId,
-      geo: p.geo,
-      timestamp: isoZ(p.timestamp),
-      ai: p.ai || {},
-      status: "ACCEPTED",
-      violations: []
-    };
-    const canon = stableStringify(hashBody);
-    const digest = sha256Hex(canon);
-
     await CollectionEvent.create({
       id: ceid,
-      clientEventId: p.clientEventId || null,
-      scientificName: p.scientificName,
-      vernacularName: p.vernacularName || null,
-      collectorId: p.collectorId,
-      geo: p.geo,
-      timestampUtc: new Date(p.timestamp),
-      ai: p.ai || null,
+      clientEventId: clientEventId || null,
+      scientificName,
+      collectorId,
+      geo,
+      timestampUtc: new Date(timestamp),
+      ai: null,
       status: "ACCEPTED",
       violations: [],
       batchId,
-      hash: digest
+      hash: null // hash will be set by blockchain team
     });
 
     return res.status(201).json({
-      collectionEvent: { ...hashBody, hash: digest },
+      collectionEvent: {
+        id: ceid,
+        scientificName,
+        collectorId,
+        geo,
+        timestamp: isoZ(timestamp),
+        ai: null,
+        status: "ACCEPTED",
+        violations: [],
+        hash: null
+      },
       batch: { id: batchId, status_phase: "CREATED" }
     });
   } catch (e) {
@@ -310,7 +307,6 @@ app.get("/collection/:id", async (req, res) => {
   return res.json({
     id: doc.id,
     scientificName: doc.scientificName,
-    vernacularName: doc.vernacularName,
     collectorId: doc.collectorId,
     geo: doc.geo,
     timestamp: isoZ(doc.timestampUtc),
@@ -394,7 +390,7 @@ app.get("/batches/chain", async (req, res) => {
 // 7) Blockchain team: update chainStatus for a batch
 app.patch("/batches/:id/chain-status", async (req, res) => {
   const { id } = req.params;
-  const { status } = req.body || {};
+  const { status, hash } = req.body || {};
   const allowed = new Set(["READY", "IN_PROGRESS", "COMPLETE"]);
   if (!status || !allowed.has(String(status).toUpperCase())) {
     return res.status(400).json({ error: "Invalid status. Use READY | IN_PROGRESS | COMPLETE" });
@@ -402,7 +398,34 @@ app.patch("/batches/:id/chain-status", async (req, res) => {
   const next = String(status).toUpperCase();
   const r = await Batch.updateOne({ id }, { $set: { chainStatus: next } });
   if (r.matchedCount === 0) return res.status(404).json({ error: "NOT_FOUND" });
-  return res.json({ id, chain_status: next });
+
+  // If hash is supplied, update all CollectionEvents for this batch
+  if (hash) {
+    await CollectionEvent.updateMany({ batchId: id }, { $set: { hash } });
+  }
+
+  return res.json({ id, chain_status: next, hash: hash || null });
+});
+
+// PATCH /batches/:id/chain-status
+// :id must be the full batch id, e.g. B-ASHWA-YYYYMMDD-farmer-123
+app.patch("/batches/:id/chain-status", async (req, res) => {
+  const { id } = req.params;
+  const { status, hash } = req.body || {};
+  const allowed = new Set(["READY", "IN_PROGRESS", "COMPLETE"]);
+  if (!status || !allowed.has(String(status).toUpperCase())) {
+    return res.status(400).json({ error: "Invalid status. Use READY | IN_PROGRESS | COMPLETE" });
+  }
+  const next = String(status).toUpperCase();
+  const r = await Batch.updateOne({ id }, { $set: { chainStatus: next } });
+  if (r.matchedCount === 0) return res.status(404).json({ error: "NOT_FOUND" });
+
+  // If hash is supplied, update all CollectionEvents for this batch
+  if (hash) {
+    await CollectionEvent.updateMany({ batchId: id }, { $set: { hash } });
+  }
+
+  return res.json({ id, chain_status: next, hash: hash || null });
 });
 
 // 8) Lab: submit quality test (moisture/pesticide) and update batch gate
@@ -504,7 +527,6 @@ app.get("/provenance/:batchId", async (req, res) => {
     collection: collEvents.map(e => ({
       id: e.id,
       scientific_name: e.scientificName,
-      vernacular_name: e.vernacularName || null,
       collector_id_masked: mask(e.collectorId),
       geo: e.geo || null,
       timestamp: isoZ(e.timestampUtc),
@@ -524,7 +546,6 @@ app.get("/provenance/:batchId", async (req, res) => {
     {
       map,
       herb_names: {
-        vernacular: firstCE?.vernacularName || null,
         scientific: batch.scientificName,
         ai_verified_confidence: aiConfidence
       },
@@ -539,4 +560,52 @@ app.get("/provenance/:batchId", async (req, res) => {
 
 // health
 app.get("/healthz", (_, res) => res.json({ ok: true }));
+
+// Blockchain team: list CollectionEvents by status
+app.get("/collections/chain", async (req, res) => {
+  const { status = "READY", page = 1, page_size = 100 } = req.query;
+  const limit = Math.min(parseInt(page_size,10) || 100, 500);
+  const skip = (parseInt(page,10) - 1) * limit;
+  const q = { status: String(status).toUpperCase() };
+  const [items, total] = await Promise.all([
+    CollectionEvent.find(q).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
+    CollectionEvent.countDocuments(q)
+  ]);
+  res.json({
+    items: items.map(e => ({ id: e.id, scientific_name: e.scientificName, collector_id: e.collectorId, status: e.status, hash: e.hash })),
+    page: Number(page), total
+  });
+});
+
+// Blockchain team: list ProcessingSteps by status
+app.get("/processing/chain", async (req, res) => {
+  const { status = "READY", page = 1, page_size = 100 } = req.query;
+  const limit = Math.min(parseInt(page_size,10) || 100, 500);
+  const skip = (parseInt(page,10) - 1) * limit;
+  const q = { status: String(status).toUpperCase() };
+  const [items, total] = await Promise.all([
+    ProcessingStep.find(q).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
+    ProcessingStep.countDocuments(q)
+  ]);
+  res.json({
+    items: items.map(s => ({ id: s.id, batch_id: s.batchId, step_type: s.stepType, status: s.status, hash: s.hash })),
+    page: Number(page), total
+  });
+});
+
+// Blockchain team: list LabTests by status
+app.get("/labtests/chain", async (req, res) => {
+  const { status = "PASS", page = 1, page_size = 100 } = req.query;
+  const limit = Math.min(parseInt(page_size,10) || 100, 500);
+  const skip = (parseInt(page,10) - 1) * limit;
+  const q = { gate: String(status).toUpperCase() };
+  const [items, total] = await Promise.all([
+    LabTest.find(q).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
+    LabTest.countDocuments(q)
+  ]);
+  res.json({
+    items: items.map(l => ({ id: l.id, batch_id: l.batchId, gate: l.gate, hash: l.hash })),
+    page: Number(page), total
+  });
+});
 
