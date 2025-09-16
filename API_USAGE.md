@@ -8,6 +8,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 **Endpoint:** `GET /healthz`
 - **Purpose:** Check if the API is running and reachable.
 - **Request:** No parameters.
+- **Sample Input:** _None_
 - **Expected Response:**
 ```json
 { "ok": true }
@@ -18,9 +19,13 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## Seed Species (Dev Only)
 **Endpoint:** `POST /dev/seed-species`
 - **Purpose:** Add or update a species in the database. Used for initial setup or adding new herbs.
-- **Request Body:**
-  - `scientificName` (string, required): Full scientific name (e.g., "Withania somnifera").
-  - `speciesCode` (string, required): Short code (e.g., "WITHA").
+- **Sample Input:**
+```json
+{
+  "scientificName": "Withania somnifera",
+  "speciesCode": "WITHA"
+}
+```
 - **Expected Response:**
 ```json
 { "ok": true }
@@ -35,15 +40,17 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## Create Collection Event
 **Endpoint:** `POST /collection`
 - **Purpose:** Record a new collection event and auto-create a batch for the day/species/collector.
-- **Request Body:**
-  - `scientificName` (string, required): Herb name.
-  - `collectorId` (string, required): Farmer/collector ID.
-  - `geo` (object, required):
-    - `lat` (number): Latitude.
-    - `lng` (number): Longitude.
-  - `timestamp` (string, required): ISO 8601 UTC timestamp.
-  - `clientEventId` (string, optional): Unique event ID for idempotency.
-  - `ai_verified_confidence` (number, optional): AI confidence (0-1).
+- **Sample Input:**
+```json
+{
+  "scientificName": "Withania somnifera",
+  "collectorId": "farmer-123",
+  "geo": { "lat": 12.93, "lng": 77.61 },
+  "timestamp": "2025-09-16T09:00:00Z",
+  "clientEventId": "ce-123",
+  "ai_verified_confidence": 0.92
+}
+```
 - **Expected Response:**
 ```json
 {
@@ -74,6 +81,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## Get Collection Event
 **Endpoint:** `GET /collection/:id`
 - **Purpose:** Fetch a single collection event by its ID.
+- **Sample Input:** _None_
 - **Expected Response:**
 ```json
 {
@@ -99,13 +107,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## List Collection Events
 **Endpoint:** `GET /collections`
 - **Purpose:** List collection events with filters for dashboards/maps.
-- **Query Params:**
-  - `species` (string, optional): Filter by scientific name.
-  - `collectorId` (string, optional): Filter by collector.
-  - `from` (string, optional): Start date (ISO).
-  - `to` (string, optional): End date (ISO).
-  - `page` (number, optional): Page number.
-  - `page_size` (number, optional): Items per page (max 200).
+- **Sample Input:** _None (use query params)_
 - **Expected Response:**
 ```json
 {
@@ -120,15 +122,14 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## Add Processing Step
 **Endpoint:** `POST /processing`
 - **Purpose:** Record a processing step for a batch.
-- **Request Body:**
-  - `batch_id` (string, required): Batch ID.
-  - `step_type` (string, required): RECEIPT | DRYING | GRINDING | ...
-  - `status` (string, optional): Status of the step (default: COMPLETED).
-  - `started_at` (string, optional): ISO timestamp.
-  - `ended_at` (string, optional): ISO timestamp.
-  - `params` (object, optional): Step parameters.
-  - `post_step_metrics` (object, optional): Metrics after step.
-  - `notes` (string, optional): Notes.
+- **Sample Input:**
+```json
+{
+  "batch_id": "B-WITHA-20250916-farmer-123",
+  "step_type": "DRYING",
+  "status": "COMPLETED"
+}
+```
 - **Expected Response:**
 ```json
 {
@@ -152,9 +153,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## List Batches
 **Endpoint:** `GET /batches`
 - **Purpose:** List batches for processor dashboard.
-- **Query Params:**
-  - `species` (string, optional): Filter by scientific name.
-  - `status` (string, optional): Filter by batch statusPhase.
+- **Sample Input:** _None (use query params)_
 - **Expected Response:**
 ```json
 [
@@ -172,11 +171,14 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## Add Lab Test
 **Endpoint:** `POST /labtest`
 - **Purpose:** Record a lab test for a batch.
-- **Request Body:**
-  - `batch_id` (string, required): Batch ID.
-  - `moisture_pct` (number, required): Moisture percentage.
-  - `pesticide_pass` (boolean, required): Pesticide test pass/fail.
-  - `pdf_url` (string, optional): Link to lab PDF.
+- **Sample Input:**
+```json
+{
+  "batch_id": "B-WITHA-20250916-farmer-123",
+  "moisture_pct": 10.5,
+  "pesticide_pass": true
+}
+```
 - **Expected Response:**
 ```json
 {
@@ -205,10 +207,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## List Lab Tests
 **Endpoint:** `GET /labtests`
 - **Purpose:** List lab tests for a batch.
-- **Query Params:**
-  - `batch_id` (string, optional): Batch ID.
-  - `page` (number, optional): Page number.
-  - `page_size` (number, optional): Items per page (max 200).
+- **Sample Input:** _None (use query params)_
 - **Expected Response:**
 ```json
 {
@@ -223,6 +222,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ## Provenance Bundle (Consumer)
 **Endpoint:** `GET /provenance/:batchId`
 - **Purpose:** Get full provenance for a batch (for consumer display).
+- **Sample Input:** _None_
 - **Expected Response:**
 ```json
 {
@@ -257,6 +257,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ### List Ready Collection Events
 **Endpoint:** `GET /collections/chain?status=READY`
 - **Purpose:** List collection events with status READY.
+- **Sample Input:** _None (use query params)_
 - **Expected Response:**
 ```json
 {
@@ -277,6 +278,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ### List Ready Processing Steps
 **Endpoint:** `GET /processing/chain?status=READY`
 - **Purpose:** List processing steps with status READY.
+- **Sample Input:** _None (use query params)_
 - **Expected Response:**
 ```json
 {
@@ -297,6 +299,7 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ### List Ready Lab Tests
 **Endpoint:** `GET /labtests/chain?status=READY`
 - **Purpose:** List lab tests with status READY.
+- **Sample Input:** _None (use query params)_
 - **Expected Response:**
 ```json
 {
@@ -317,9 +320,13 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ### Update Hash/Status for Collection Event
 **Endpoint:** `PATCH /collection/:id/blockchain`
 - **Purpose:** Update status and/or hash for a collection event.
-- **Request Body:**
-  - `status` (string, optional): READY | IN_PROGRESS | COMPLETE
-  - `hash` (string, optional): Blockchain hash
+- **Sample Input:**
+```json
+{
+  "status": "READY",
+  "hash": "hash-ce-123"
+}
+```
 - **Expected Response:**
 ```json
 { "id": "CE-12345678", "status": "READY", "hash": "hash-ce-123" }
@@ -328,9 +335,13 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ### Update Hash/Status for Processing Step
 **Endpoint:** `PATCH /processing/:id/blockchain`
 - **Purpose:** Update status and/or hash for a processing step.
-- **Request Body:**
-  - `status` (string, optional): READY | IN_PROGRESS | COMPLETE
-  - `hash` (string, optional): Blockchain hash
+- **Sample Input:**
+```json
+{
+  "status": "READY",
+  "hash": "hash-ps-123"
+}
+```
 - **Expected Response:**
 ```json
 { "id": "PS-12345678", "status": "READY", "hash": "hash-ps-123" }
@@ -339,9 +350,13 @@ Base URL: `https://ayurtrace-farmer.onrender.com`
 ### Update Hash/Status for Lab Test
 **Endpoint:** `PATCH /labtest/:id/blockchain`
 - **Purpose:** Update status and/or hash for a lab test.
-- **Request Body:**
-  - `status` (string, optional): READY | IN_PROGRESS | COMPLETE
-  - `hash` (string, optional): Blockchain hash
+- **Sample Input:**
+```json
+{
+  "status": "READY",
+  "hash": "hash-lt-123"
+}
+```
 - **Expected Response:**
 ```json
 { "id": "LT-12345678", "status": "READY", "hash": "hash-lt-123" }
