@@ -148,16 +148,12 @@ const Batch = mongoose.model(
     collectorId: { type: String, required: true },
     dateUtc: { type: String, required: true },             // YYYY-MM-DD
     statusPhase: { type: String, default: "CREATED" },     // CREATED → ... → READY_FOR_QA
-    chainStatus: {                                         // READY | IN_PROGRESS | COMPLETE
-      type: String,
-      enum: ["READY", "IN_PROGRESS", "COMPLETE"],
-      default: "READY"
-    },
-    qualityGate: {                                         // PASS | FAIL | PENDING
+    qualityGate: {
       type: String,
       enum: ["PASS", "FAIL", "PENDING"],
       default: "PENDING"
-    }
+    },
+    qrCodeUrl: String                                    // QR code link for provenance
   }, { timestamps: true })
 );
 
@@ -172,7 +168,8 @@ const ProcessingStep = mongoose.model(
     endedAt: Date,
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
     postMetrics: { type: mongoose.Schema.Types.Mixed, default: {} },
-    notes: String
+    notes: String,
+    hash: String                                           // blockchain hash, auto-generated at creation
   }, { timestamps: true })
 );
 
@@ -186,7 +183,9 @@ const LabTest = mongoose.model(
     pesticidePass: { type: Boolean, required: true },
     pdfUrl: { type: String },                               // optional
     gate: { type: String, enum: ["PASS", "FAIL"], required: true },
-    evaluatedAt: { type: Date, default: Date.now }
+    evaluatedAt: { type: Date, default: Date.now },
+    status: { type: String, default: "READY", enum: ["READY", "IN_PROGRESS", "COMPLETE"] },
+    hash: String                                           // blockchain hash, auto-generated at creation
   }, { timestamps: true })
 );
 
@@ -230,7 +229,8 @@ app.post("/collection", async (req, res) => {
       collectorId,
       geo,
       timestamp,
-      clientEventId
+      clientEventId,
+      ai_verified_confidence
     } = req.body;
 
     // idempotency by clientEventId
@@ -258,11 +258,20 @@ app.post("/collection", async (req, res) => {
     const code = await speciesCodeFor(scientificName);
     const batchId = makeBatchId(code, timestamp, collectorId);
     const dateUtc = isoZ(timestamp).slice(0,10);
+    const batchInfoRaw = JSON.stringify({
+      id: batchId,
+      scientificName,
+      collectorId,
+      dateUtc,
+      statusPhase: "CREATED"
+    });
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batchInfoRaw)}`;
     await Batch.updateOne(
       { id: batchId },
-      { $setOnInsert: { id: batchId, scientificName, collectorId, dateUtc, statusPhase: "CREATED" } },
+      { $setOnInsert: { id: batchId, scientificName, collectorId, dateUtc, statusPhase: "CREATED", qrCodeUrl } },
       { upsert: true }
     );
+    const batchDoc = await Batch.findOne({ id: batchId }).lean();
 
     // CE id (no hash at creation)
     const ceid = "CE-" + crypto.randomBytes(4).toString("hex");
@@ -273,7 +282,7 @@ app.post("/collection", async (req, res) => {
       collectorId,
       geo,
       timestampUtc: new Date(timestamp),
-      ai: null,
+      ai: ai_verified_confidence !== undefined ? { confidence: ai_verified_confidence } : null,
       status: "ACCEPTED",
       violations: [],
       batchId,
@@ -292,7 +301,11 @@ app.post("/collection", async (req, res) => {
         violations: [],
         hash: null
       },
-      batch: { id: batchId, status_phase: "CREATED" }
+      batch: {
+        id: batchId,
+        status_phase: "CREATED",
+        qr_code_url: batchDoc?.qrCodeUrl || null
+      }
     });
   } catch (e) {
     console.error(e);
@@ -341,6 +354,7 @@ app.post("/processing", async (req, res) => {
   const p = req.body || {};
   if (!p.batch_id || !p.step_type) return res.status(400).json({ error: "batch_id and step_type required" });
   const id = "PS-" + crypto.randomBytes(4).toString("hex");
+  const autoHash = sha256Hex(id + ":" + p.batch_id);
   const doc = await ProcessingStep.create({
     id,
     batchId: p.batch_id,
@@ -350,7 +364,8 @@ app.post("/processing", async (req, res) => {
     endedAt: p.ended_at ? new Date(p.ended_at) : undefined,
     params: p.params || {},
     postMetrics: p.post_step_metrics || {},
-    notes: p.notes || ""
+    notes: p.notes || "",
+    hash: autoHash // auto-generated hash
   });
   // Bump batch phase naïvely based on stepType
   const phaseMap = { RECEIPT: "RECEIPT_DONE", DRYING: "DRYING_DONE", GRINDING: "GRINDING_DONE" };
@@ -368,7 +383,7 @@ app.get("/batches", async (req, res) => {
   const rows = await Batch.find(q).sort({ createdAt: -1 }).lean();
   res.json(rows.map(r => ({
     id: r.id, species: r.scientificName, status_phase: r.statusPhase, date_utc: r.dateUtc
-  })));
+})));
 });
 
 // 6) Blockchain team: list batches by chainStatus (READY by default)
@@ -438,13 +453,15 @@ app.post("/labtest", async (req, res) => {
   }
   const gate = (p.moisture_pct <= MOISTURE_THRESHOLD_PCT && p.pesticide_pass) ? "PASS" : "FAIL";
   const id = "LT-" + crypto.randomBytes(4).toString("hex");
+  const autoHash = sha256Hex(id + ":" + p.batch_id);
   const doc = await LabTest.create({
     id,
     batchId: p.batch_id,
     moisturePct: p.moisture_pct,
     pesticidePass: p.pesticide_pass,
     pdfUrl: p.pdf_url || undefined,
-    gate
+    gate,
+    hash: autoHash // auto-generated hash
   });
   await Batch.updateOne({ id: p.batch_id }, { $set: { qualityGate: gate } });
   return res.status(201).json({
@@ -505,8 +522,47 @@ app.get("/provenance/:batchId", async (req, res) => {
   const labSummary = latestLab ? {
     moisture_pct: latestLab.moisturePct,
     pesticide_pass: latestLab.pesticidePass,
-    gate: latestLab.gate
+    gate: latestLab.gate,
+    pdf_url: latestLab.pdfUrl || null,
+    evaluated_at: latestLab.evaluatedAt ? isoZ(latestLab.evaluatedAt) : null
   } : null;
+
+  // Logical formatting, exclude hash and id fields
+  const batchInfo = {
+    species_scientific: batch.scientificName,
+    collector_id_masked: mask(batch.collectorId),
+    date_utc: batch.dateUtc,
+    status_phase: batch.statusPhase,
+    quality_gate: batch.qualityGate || "PENDING"
+  };
+
+  const collection = collEvents.map(e => ({
+    scientific_name: e.scientificName,
+    collector_id_masked: mask(e.collectorId),
+    geo: e.geo || null,
+    timestamp: isoZ(e.timestampUtc),
+    ai: e.ai || {},
+    status: e.status,
+    violations: e.violations || []
+  }));
+
+  const processing_steps = steps.map(s => ({
+    step_type: s.stepType,
+    status: s.status,
+    started_at: s.startedAt ? isoZ(s.startedAt) : null,
+    ended_at: s.endedAt ? isoZ(s.endedAt) : null,
+    params: s.params || {},
+    post_step_metrics: s.postMetrics || {},
+    notes: s.notes || ""
+  }));
+
+  const lab_results = labTests.map(l => ({
+    moisture_pct: l.moisturePct,
+    pesticide_pass: l.pesticidePass,
+    gate: l.gate,
+    pdf_url: l.pdfUrl || null,
+    evaluated_at: l.evaluatedAt ? isoZ(l.evaluatedAt) : null
+  }));
 
   // Placeholder on-chain verification section
   const onChain = {
@@ -515,35 +571,11 @@ app.get("/provenance/:batchId", async (req, res) => {
   };
 
   const bundle = {
-    batch: {
-      id: batch.id,
-      species_scientific: batch.scientificName,
-      collector_id_masked: mask(batch.collectorId),
-      date_utc: batch.dateUtc,
-      status_phase: batch.statusPhase,
-      chain_status: batch.chainStatus,
-      quality_gate: batch.qualityGate || "PENDING"
-    },
-    collection: collEvents.map(e => ({
-      id: e.id,
-      scientific_name: e.scientificName,
-      collector_id_masked: mask(e.collectorId),
-      geo: e.geo || null,
-      timestamp: isoZ(e.timestampUtc),
-      ai: e.ai || {}
-    })),
-    processing_steps: steps.map(s => ({
-      id: s.id,
-      step_type: s.stepType,
-      status: s.status,
-      started_at: s.startedAt ? isoZ(s.startedAt) : null,
-      ended_at: s.endedAt ? isoZ(s.endedAt) : null,
-      params: s.params || {},
-      post_step_metrics: s.postMetrics || {}
-    })),
-    lab_results: labSummary,
-    ui:
-    {
+    batch: batchInfo,
+    collection,
+    processing_steps,
+    lab_results,
+    ui: {
       map,
       herb_names: {
         scientific: batch.scientificName,
@@ -551,8 +583,7 @@ app.get("/provenance/:batchId", async (req, res) => {
       },
       processing_summary: steps.map(s => s.stepType),
       recall_banner: false
-    },
-    on_chain: onChain
+    }
   };
 
   return res.json(bundle);
@@ -595,17 +626,65 @@ app.get("/processing/chain", async (req, res) => {
 
 // Blockchain team: list LabTests by status
 app.get("/labtests/chain", async (req, res) => {
-  const { status = "PASS", page = 1, page_size = 100 } = req.query;
+  const { status = "READY", page = 1, page_size = 100 } = req.query;
   const limit = Math.min(parseInt(page_size,10) || 100, 500);
   const skip = (parseInt(page,10) - 1) * limit;
-  const q = { gate: String(status).toUpperCase() };
+  const q = { status: String(status).toUpperCase() };
   const [items, total] = await Promise.all([
     LabTest.find(q).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
     LabTest.countDocuments(q)
   ]);
   res.json({
-    items: items.map(l => ({ id: l.id, batch_id: l.batchId, gate: l.gate, hash: l.hash })),
+    items: items.map(l => ({ id: l.id, batch_id: l.batchId, status: l.status, gate: l.gate, hash: l.hash })),
     page: Number(page), total
   });
+});
+
+// Blockchain team: update status/hash for a ProcessingStep
+app.patch("/processing/:id/blockchain", async (req, res) => {
+  const { id } = req.params;
+  const { status, hash } = req.body || {};
+  const allowed = new Set(["READY", "IN_PROGRESS", "COMPLETE"]);
+  if (status && !allowed.has(String(status).toUpperCase())) {
+    return res.status(400).json({ error: "Invalid status. Use READY | IN_PROGRESS | COMPLETE" });
+  }
+  const update = {};
+  if (status) update.status = String(status).toUpperCase();
+  if (hash) update.hash = hash;
+  const r = await ProcessingStep.updateOne({ id }, { $set: update });
+  if (r.matchedCount === 0) return res.status(404).json({ error: "NOT_FOUND" });
+  return res.json({ id, ...update });
+});
+
+// Blockchain team: update hash for a LabTest
+app.patch("/labtest/:id/blockchain", async (req, res) => {
+  const { id } = req.params;
+  const { status, hash } = req.body || {};
+  const allowed = new Set(["READY", "IN_PROGRESS", "COMPLETE"]);
+  if (status && !allowed.has(String(status).toUpperCase())) {
+    return res.status(400).json({ error: "Invalid status. Use READY | IN_PROGRESS | COMPLETE" });
+  }
+  const update = {};
+  if (status) update.status = String(status).toUpperCase();
+  if (hash) update.hash = hash;
+  const r = await LabTest.updateOne({ id }, { $set: update });
+  if (r.matchedCount === 0) return res.status(404).json({ error: "NOT_FOUND" });
+  return res.json({ id, ...update });
+});
+
+// Blockchain team: update status/hash for a CollectionEvent
+app.patch("/collection/:id/blockchain", async (req, res) => {
+  const { id } = req.params;
+  const { status, hash } = req.body || {};
+  const allowed = new Set(["READY", "IN_PROGRESS", "COMPLETE"]);
+  if (status && !allowed.has(String(status).toUpperCase())) {
+    return res.status(400).json({ error: "Invalid status. Use READY | IN_PROGRESS | COMPLETE" });
+  }
+  const update = {};
+  if (status) update.status = String(status).toUpperCase();
+  if (hash) update.hash = hash;
+  const r = await CollectionEvent.updateOne({ id }, { $set: update });
+  if (r.matchedCount === 0) return res.status(404).json({ error: "NOT_FOUND" });
+  return res.json({ id, ...update });
 });
 
