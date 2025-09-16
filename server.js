@@ -452,6 +452,91 @@ app.get("/labtests", async (req, res) => {
   res.json({ items, page: Number(page), total });
 });
 
+// 9) Consumer: provenance bundle for a batch
+// Assembles off-chain JSON from our DB. On-chain verification is left as a placeholder.
+app.get("/provenance/:batchId", async (req, res) => {
+  const batchId = req.params.batchId;
+  // Fetch core pieces
+  const [batch, collEvents, steps, labTests] = await Promise.all([
+    Batch.findOne({ id: batchId }).lean(),
+    CollectionEvent.find({ batchId }).sort({ timestampUtc: 1 }).lean(),
+    ProcessingStep.find({ batchId }).sort({ createdAt: 1 }).lean(),
+    LabTest.find({ batchId }).sort({ createdAt: -1 }).lean()
+  ]);
+
+  if (!batch) return res.status(404).json({ error: "BATCH_NOT_FOUND" });
+
+  // Mask collector id (simple masking)
+  const mask = (s) => (typeof s === 'string' && s.length > 4) ? s.slice(0,2) + "***" + s.slice(-1) : s;
+
+  // Build map marker from first collection event
+  const firstCE = collEvents[0] || null;
+  const map = firstCE?.geo ? { lat: firstCE.geo.lat, lng: firstCE.geo.lng } : null;
+
+  // AI chip confidence (if present in CE.ai)
+  const ai = firstCE?.ai && typeof firstCE.ai === 'object' ? firstCE.ai : {};
+  const aiConfidence = typeof ai.confidence === 'number' ? ai.confidence : null;
+
+  // Lab gate summary (latest)
+  const latestLab = labTests[0] || null;
+  const labSummary = latestLab ? {
+    moisture_pct: latestLab.moisturePct,
+    pesticide_pass: latestLab.pesticidePass,
+    gate: latestLab.gate
+  } : null;
+
+  // Placeholder on-chain verification section
+  const onChain = {
+    verified: false,
+    notes: "On-chain verification placeholder. Integrate with chain index and compare hashes.",
+  };
+
+  const bundle = {
+    batch: {
+      id: batch.id,
+      species_scientific: batch.scientificName,
+      collector_id_masked: mask(batch.collectorId),
+      date_utc: batch.dateUtc,
+      status_phase: batch.statusPhase,
+      chain_status: batch.chainStatus,
+      quality_gate: batch.qualityGate || "PENDING"
+    },
+    collection: collEvents.map(e => ({
+      id: e.id,
+      scientific_name: e.scientificName,
+      vernacular_name: e.vernacularName || null,
+      collector_id_masked: mask(e.collectorId),
+      geo: e.geo || null,
+      timestamp: isoZ(e.timestampUtc),
+      ai: e.ai || {}
+    })),
+    processing_steps: steps.map(s => ({
+      id: s.id,
+      step_type: s.stepType,
+      status: s.status,
+      started_at: s.startedAt ? isoZ(s.startedAt) : null,
+      ended_at: s.endedAt ? isoZ(s.endedAt) : null,
+      params: s.params || {},
+      post_step_metrics: s.postMetrics || {}
+    })),
+    lab_results: labSummary,
+    ui:
+    {
+      map,
+      herb_names: {
+        vernacular: firstCE?.vernacularName || null,
+        scientific: batch.scientificName,
+        ai_verified_confidence: aiConfidence
+      },
+      processing_summary: steps.map(s => s.stepType),
+      recall_banner: false
+    },
+    on_chain: onChain
+  };
+
+  return res.json(bundle);
+});
+
 // health
 app.get("/healthz", (_, res) => res.json({ ok: true }));
 
