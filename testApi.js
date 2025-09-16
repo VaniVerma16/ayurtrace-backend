@@ -1,5 +1,5 @@
 const axios = require('axios');
-const BASE = 'http://localhost:8000';
+const BASE = 'https://ayurtrace-farmer.onrender.com';
 
 async function run() {
   try {
