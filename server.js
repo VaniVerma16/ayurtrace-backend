@@ -7,7 +7,28 @@ const dns = require("dns");
 const crypto = require("crypto");
 
 const app = express();
-app.use(cors()); // <-- Added
+
+
+
+
+// if you don't need cookies/Authorization from browser:
+app.use(cors({
+  origin: "http://localhost:8080",
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"]
+}));
+
+// If you DO send cookies or Authorization and want them from the browser:
+app.use(cors({
+  origin: "http://localhost:8080",
+  credentials: true,
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"]
+}));
+
+// Good to explicitly answer preflight for custom headers/methods
+app.options("*", cors());
+
 app.use(express.json({ limit: "5mb" }));
 
 // Force reliable DNS for SRV lookups (fixes intermittent macOS resolver issues)
