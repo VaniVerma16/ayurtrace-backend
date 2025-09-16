@@ -44,17 +44,7 @@ app.options('*', cors(corsOptions));     // answer preflight
 
 app.use(express.json());
 
-// Example route
-app.get('/provenance/:id', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    // const data = await getProvenanceById(id);
-    // res.json(data);
-    res.json({ ok: true, id }); // placeholder
-  } catch (e) {
-    next(e);
-  }
-});
+
 
 // Central error handler
 app.use((err, req, res, _next) => {
