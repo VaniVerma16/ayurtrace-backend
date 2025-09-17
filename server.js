@@ -314,7 +314,9 @@ app.post("/collection", async (req, res) => {
       dateUtc,
       statusPhase: "CREATED"
     });
-    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(batchInfoRaw)}`;
+    // Make QR point to the frontend batch page so scanning opens the consumer UI
+    const qrTarget = `https://ayurtracefront.netlify.app/${batchId}`;
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrTarget)}`;
     await Batch.updateOne(
       { id: batchId },
       { $setOnInsert: { id: batchId, scientificName, collectorId, dateUtc, statusPhase: "CREATED", qrCodeUrl } },
